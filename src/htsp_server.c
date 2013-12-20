@@ -16,6 +16,28 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "tvheadend.h"
+#include "atomic.h"
+#include "channels.h"
+#include "subscriptions.h"
+#include "tcp.h"
+#include "packet.h"
+#include "access.h"
+#include "htsp_server.h"
+#include "streaming.h"
+#include "htsmsg_binary.h"
+#include "epg.h"
+#include "plumbing/tsfix.h"
+#include "imagecache.h"
+#include "descrambler.h"
+#include "notify.h"
+#if ENABLE_TIMESHIFT
+#include "timeshift.h"
+#endif
+#if ENABLE_LIBAV
+#include "plumbing/transcoding.h"
+#endif
+
 #include <pthread.h>
 #include <assert.h>
 #include <stdio.h>
@@ -31,26 +53,6 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-
-#include "tvheadend.h"
-#include "channels.h"
-#include "subscriptions.h"
-#include "tcp.h"
-#include "packet.h"
-#include "access.h"
-#include "htsp_server.h"
-#include "streaming.h"
-#include "psi.h"
-#include "htsmsg_binary.h"
-#include "epg.h"
-#include "plumbing/tsfix.h"
-#include "imagecache.h"
-#if ENABLE_TIMESHIFT
-#include "timeshift.h"
-#endif
-#if ENABLE_LIBAV
-#include "plumbing/transcoding.h"
-#endif
 #include <sys/statvfs.h>
 #include "settings.h"
 #include <sys/time.h>
@@ -198,6 +200,8 @@ streaming_target_t *hs_transcoder;
 #define NUM_FILTERED_STREAMS (32*16)
 
   uint32_t hs_filtered_streams[16]; // one bit per stream
+
+  int hs_first;
 
 } htsp_subscription_t;
 
@@ -501,6 +505,7 @@ static htsmsg_t *
 htsp_build_channel(channel_t *ch, const char *method, htsp_connection_t *htsp)
 {
   channel_tag_mapping_t *ctm;
+  channel_service_mapping_t *csm;
   channel_tag_t *ct;
   service_t *t;
   epg_broadcast_t *now, *next = NULL;
@@ -509,10 +514,10 @@ htsp_build_channel(channel_t *ch, const char *method, htsp_connection_t *htsp)
   htsmsg_t *tags = htsmsg_create_list();
   htsmsg_t *services = htsmsg_create_list();
 
-  htsmsg_add_u32(out, "channelId", ch->ch_id);
-  htsmsg_add_u32(out, "channelNumber", ch->ch_number);
+  htsmsg_add_u32(out, "channelId", channel_get_id(ch));
+  htsmsg_add_u32(out, "channelNumber", channel_get_number(ch));
 
-  htsmsg_add_str(out, "channelName", ch->ch_name);
+  htsmsg_add_str(out, "channelName", channel_get_name(ch));
   if(ch->ch_icon != NULL) {
     uint32_t id;
     struct sockaddr_storage addr;
@@ -552,14 +557,15 @@ htsp_build_channel(channel_t *ch, const char *method, htsp_connection_t *htsp)
       htsmsg_add_u32(tags, NULL, ct->ct_identifier);
   }
 
-  LIST_FOREACH(t, &ch->ch_services, s_ch_link) {
+  LIST_FOREACH(csm, &ch->ch_services, csm_chn_link) {
+    t = csm->csm_svc;
     htsmsg_t *svcmsg = htsmsg_create_map();
     uint16_t caid;
     htsmsg_add_str(svcmsg, "name", service_nicename(t));
     htsmsg_add_str(svcmsg, "type", service_servicetype_txt(t));
     if((caid = service_get_encryption(t)) != 0) {
       htsmsg_add_u32(svcmsg, "caid", caid);
-      htsmsg_add_str(svcmsg, "caname", psi_caid2name(caid));
+      htsmsg_add_str(svcmsg, "caname", descrambler_caid2name(caid));
     }
     htsmsg_add_msg(services, NULL, svcmsg);
   }
@@ -588,7 +594,7 @@ htsp_build_tag(channel_tag_t *ct, const char *method, int include_channels)
 
   if(members != NULL) {
     LIST_FOREACH(ctm, &ct->ct_ctms, ctm_tag_link)
-      htsmsg_add_u32(members, NULL, ctm->ctm_channel->ch_id);
+      htsmsg_add_u32(members, NULL, channel_get_id(ctm->ctm_channel));
     htsmsg_add_msg(out, "members", members);
   }
 
@@ -609,7 +615,7 @@ htsp_build_dvrentry(dvr_entry_t *de, const char *method)
 
   htsmsg_add_u32(out, "id", de->de_id);
   if (de->de_channel)
-    htsmsg_add_u32(out, "channel", de->de_channel->ch_id);
+    htsmsg_add_u32(out, "channel", channel_get_id(de->de_channel));
 
   htsmsg_add_s64(out, "start", de->de_start);
   htsmsg_add_s64(out, "stop", de->de_stop);
@@ -690,7 +696,7 @@ htsp_build_event
     htsmsg_add_str(out, "method", method);
 
   htsmsg_add_u32(out, "eventId", e->id);
-  htsmsg_add_u32(out, "channelId", e->channel->ch_id);
+  htsmsg_add_u32(out, "channelId", channel_get_id(e->channel));
   htsmsg_add_s64(out, "start", e->start);
   htsmsg_add_s64(out, "stop", e->stop);
   if ((str = epg_broadcast_get_title(e, lang)))
@@ -895,7 +901,7 @@ htsp_method_async(htsp_connection_t *htsp, htsmsg_t *in)
       htsp_send_message(htsp, htsp_build_tag(ct, "tagAdd", 0), NULL);
   
   /* Send all channels */
-  RB_FOREACH(ch, &channel_name_tree, ch_name_link)
+  CHANNEL_FOREACH(ch)
     htsp_send_message(htsp, htsp_build_channel(ch, "channelAdd", htsp), NULL);
     
   /* Send all enabled and external tags (now with channel mappings) */
@@ -909,7 +915,7 @@ htsp_method_async(htsp_connection_t *htsp, htsmsg_t *in)
 
   /* Send EPG updates */
   if (epg) {
-    RB_FOREACH(ch, &channel_name_tree, ch_name_link)
+    CHANNEL_FOREACH(ch)
       RB_FOREACH(ebc, &ch->ch_epg_schedule, sched_link) {
         if (epgMaxTime && ebc->start > epgMaxTime) break;
         htsmsg_t *e = htsp_build_event(ebc, "eventAdd", lang, lastUpdate, htsp);
@@ -964,7 +970,7 @@ htsp_method_getEvents(htsp_connection_t *htsp, htsmsg_t *in)
 
   /* Optional fields */
   if (!htsmsg_get_u32(in, "channelId", &u32))
-    if (!(ch = channel_find_by_identifier(u32)))
+    if (!(ch = channel_find_by_id(u32)))
       return htsp_error("Channel does not exist");
   if (!htsmsg_get_u32(in, "eventId", &u32))
     if (!(e = epg_broadcast_find_by_id(u32, ch)))
@@ -993,7 +999,7 @@ htsp_method_getEvents(htsp_connection_t *htsp, htsmsg_t *in)
   /* All channels */
   } else {
     events = htsmsg_create_list();
-    RB_FOREACH(ch, &channel_name_tree, ch_name_link) {
+    CHANNEL_FOREACH(ch) {
       int num = numFollowing;
       RB_FOREACH(e, &ch->ch_epg_schedule, sched_link) {
         if (maxTime && e->start > maxTime) break;
@@ -1033,7 +1039,7 @@ htsp_method_epgQuery(htsp_connection_t *htsp, htsmsg_t *in)
   
   /* Optional */
   if(!(htsmsg_get_u32(in, "channelId", &u32)))
-    if (!(ch = channel_find_by_identifier(u32)))
+    if (!(ch = channel_find_by_id(u32)))
       return htsp_error("Channel does not exist");
   if(!(htsmsg_get_u32(in, "tagId", &u32)))
     if (!(ct = channel_tag_find_by_identifier(u32)))
@@ -1121,7 +1127,7 @@ htsp_method_addDvrEntry(htsp_connection_t *htsp, htsmsg_t *in)
   if(htsmsg_get_s64(in, "stopExtra", &stop_extra))
     stop_extra  = 0;
   if(!htsmsg_get_u32(in, "channelId", &u32))
-    ch = channel_find_by_identifier(u32);
+    ch = channel_find_by_id(u32);
   if(!htsmsg_get_u32(in, "eventId", &eventid))
     e = epg_broadcast_find_by_id(eventid, ch);
   if(htsmsg_get_u32(in, "priority", &priority))
@@ -1305,18 +1311,18 @@ htsp_method_subscribe(htsp_connection_t *htsp, htsmsg_t *in)
 #if ENABLE_TIMESHIFT
   uint32_t timeshiftPeriod = 0;
 #endif
+  const char *str;
   channel_t *ch;
   htsp_subscription_t *hs;
-  const char *str;
   if(htsmsg_get_u32(in, "subscriptionId", &sid))
     return htsp_error("Missing argument 'subscriptionId'");
 
   if(!htsmsg_get_u32(in, "channelId", &chid)) {
 
-    if((ch = channel_find_by_identifier(chid)) == NULL)
+    if((ch = channel_find_by_id(chid)) == NULL)
       return htsp_error("Requested channel does not exist");
   } else if((str = htsmsg_get_str(in, "channelName")) != NULL) {
-    if((ch = channel_find_by_name(str, 0, 0)) == NULL)
+    if((ch = channel_find_by_name(str)) == NULL)
       return htsp_error("Requested channel does not exist");
 
   } else {
@@ -1410,6 +1416,7 @@ htsp_method_subscribe(htsp_connection_t *htsp, htsmsg_t *in)
   if(normts)
     st = hs->hs_tsfix = tsfix_create(st);
 
+  tvhdebug("htsp", "%s - subscribe to %s\n", htsp->htsp_logname, ch->ch_name ?: "");
   hs->hs_s = subscription_create_from_channel(ch, weight,
 					      htsp->htsp_logname,
 					      st, 0,
@@ -1846,6 +1853,7 @@ htsp_authenticate(htsp_connection_t *htsp, htsmsg_t *m)
 	   htsp->htsp_logname, username);
     tvh_str_update(&htsp->htsp_username, username);
     htsp_update_logname(htsp);
+    notify_reload("connections");
   }
 
   if(htsmsg_get_bin(m, "digest", &digest, &digestlen))
@@ -1938,6 +1946,7 @@ readmsg:
     htsp_authenticate(htsp, m);
 
     if((method = htsmsg_get_str(m, "method")) != NULL) {
+      tvhtrace("htsp", "%s - method %s", htsp->htsp_logname, method);
       for(i = 0; i < NUM_METHODS; i++) {
 	      if(!strcmp(method, htsp_methods[i].name)) {
 
@@ -2050,7 +2059,7 @@ htsp_write_scheduler(void *aux)
  *
  */
 static void
-htsp_serve(int fd, void *opaque, struct sockaddr_storage *source,
+htsp_serve(int fd, void **opaque, struct sockaddr_storage *source,
 	   struct sockaddr_storage *self)
 {
   htsp_connection_t htsp;
@@ -2060,6 +2069,7 @@ htsp_serve(int fd, void *opaque, struct sockaddr_storage *source,
   tcp_get_ip_str((struct sockaddr*)source, buf, 50);
 
   memset(&htsp, 0, sizeof(htsp_connection_t));
+  *opaque = &htsp;
 
   TAILQ_INIT(&htsp.htsp_active_output_queues);
 
@@ -2078,7 +2088,8 @@ htsp_serve(int fd, void *opaque, struct sockaddr_storage *source,
   LIST_INSERT_HEAD(&htsp_connections, &htsp, htsp_link);
   pthread_mutex_unlock(&global_lock);
 
-  pthread_create(&htsp.htsp_writer_thread, NULL, htsp_write_scheduler, &htsp);
+  tvhthread_create(&htsp.htsp_writer_thread, NULL,
+                   htsp_write_scheduler, &htsp, 0);
 
   /**
    * Reader loop
@@ -2093,6 +2104,8 @@ htsp_serve(int fd, void *opaque, struct sockaddr_storage *source,
    */
 
   pthread_mutex_lock(&global_lock);
+
+  *opaque = NULL;
 
   /* Beware! Closing subscriptions will invoke a lot of callbacks
      down in the streaming code. So we do this as early as possible
@@ -2137,6 +2150,18 @@ htsp_serve(int fd, void *opaque, struct sockaddr_storage *source,
   close(fd);
 }
 
+/*
+ * Status callback
+ */
+static void
+htsp_server_status ( void *opaque, htsmsg_t *m )
+{
+  htsp_connection_t *htsp = opaque;
+  htsmsg_add_str(m, "type", "HTSP");
+  if (htsp->htsp_username)
+    htsmsg_add_str(m, "user", htsp->htsp_username);
+}
+
 /**
  *  Fire up HTSP server
  */
@@ -2144,9 +2169,14 @@ void
 htsp_init(const char *bindaddr)
 {
   extern int tvheadend_htsp_port_extra;
-  htsp_server = tcp_server_create(bindaddr, tvheadend_htsp_port, htsp_serve, NULL);
+  static tcp_server_ops_t ops = {
+    .start  = htsp_serve,
+    .stop   = NULL,
+    .status = htsp_server_status,
+  };
+  htsp_server = tcp_server_create(bindaddr, tvheadend_htsp_port, &ops, NULL);
   if(tvheadend_htsp_port_extra)
-    htsp_server_2 = tcp_server_create(bindaddr, tvheadend_htsp_port_extra, htsp_serve, NULL);
+    htsp_server_2 = tcp_server_create(bindaddr, tvheadend_htsp_port_extra, &ops, NULL);
 }
 
 /* **************************************************************************
@@ -2182,7 +2212,7 @@ htsp_channel_update_nownext(channel_t *ch)
 
   m = htsmsg_create_map();
   htsmsg_add_str(m, "method", "channelUpdate");
-  htsmsg_add_u32(m, "channelId", ch->ch_id);
+  htsmsg_add_u32(m, "channelId", channel_get_id(ch));
 
   now  = ch->ch_epg_now;
   next = ch->ch_epg_next;
@@ -2225,7 +2255,7 @@ void
 htsp_channel_delete(channel_t *ch)
 {
   htsmsg_t *m = htsmsg_create_map();
-  htsmsg_add_u32(m, "channelId", ch->ch_id);
+  htsmsg_add_u32(m, "channelId", channel_get_id(ch));
   htsmsg_add_str(m, "method", "channelDelete");
   htsp_async_send(m, HTSP_ASYNC_ON);
 }
@@ -2403,6 +2433,7 @@ htsp_stream_deliver(htsp_subscription_t *hs, th_pkt_t *pkt)
   htsmsg_add_binptr(m, "payload", pktbuf_ptr(pkt->pkt_payload),
 		    pktbuf_len(pkt->pkt_payload));
   htsp_send(htsp, m, pkt->pkt_payload, &hs->hs_q, pktbuf_len(pkt->pkt_payload));
+  atomic_add(&hs->hs_s->ths_bytes_out, pktbuf_len(pkt->pkt_payload));
 
   if(hs->hs_last_report != dispatch_clock) {
 
@@ -2471,6 +2502,7 @@ htsp_subscription_start(htsp_subscription_t *hs, const streaming_start_t *ss)
   htsmsg_t *sourceinfo = htsmsg_create_map();
   int i;
   const source_info_t *si = &ss->ss_si;
+  tvhdebug("htsp", "%s - subscription start", hs->hs_htsp->htsp_logname);
 
   for(i = 0; i < ss->ss_num_components; i++) {
     const streaming_start_component_t *ssc = &ss->ss_components[i];
@@ -2536,6 +2568,7 @@ htsp_subscription_stop(htsp_subscription_t *hs, const char *err)
   htsmsg_t *m = htsmsg_create_map();
   htsmsg_add_str(m, "method", "subscriptionStop");
   htsmsg_add_u32(m, "subscriptionId", hs->hs_sid);
+  tvhdebug("htsp", "%s - subscription stop", hs->hs_htsp->htsp_logname);
 
   if(err != NULL)
     htsmsg_add_str(m, "status", err);
@@ -2600,6 +2633,7 @@ static void
 htsp_subscription_speed(htsp_subscription_t *hs, int speed)
 {
   htsmsg_t *m = htsmsg_create_map();
+  tvhdebug("htsp", "%s - subscription speed", hs->hs_htsp->htsp_logname);
   htsmsg_add_str(m, "method", "subscriptionSpeed");
   htsmsg_add_u32(m, "subscriptionId", hs->hs_sid);
   htsmsg_add_u32(m, "speed", speed);
@@ -2613,6 +2647,7 @@ static void
 htsp_subscription_skip(htsp_subscription_t *hs, streaming_skip_t *skip)
 {
   htsmsg_t *m = htsmsg_create_map();
+  tvhdebug("htsp", "%s - subscription skip", hs->hs_htsp->htsp_logname);
   htsmsg_add_str(m, "method", "subscriptionSkip");
   htsmsg_add_u32(m, "subscriptionId", hs->hs_sid);
 
@@ -2661,6 +2696,9 @@ htsp_streaming_input(void *opaque, streaming_message_t *sm)
 
   switch(sm->sm_type) {
   case SMT_PACKET:
+    if (!hs->hs_first)
+      tvhdebug("htsp", "%s - first packet", hs->hs_htsp->htsp_logname);
+    hs->hs_first = 1;
     htsp_stream_deliver(hs, sm->sm_data);
     // reference is transfered
     sm->sm_data = NULL;

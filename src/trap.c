@@ -173,11 +173,7 @@ traphandler(int sig, siginfo_t *si, void *UC)
   snprintf(tmpbuf, sizeof(tmpbuf), "Register dump [%d]: ", NGREG);
 
   for(i = 0; i < NGREG; i++) {
-#if __WORDSIZE == 64
-    sappend(tmpbuf, sizeof(tmpbuf), "%016llx ", uc->uc_mcontext.gregs[i]);
-#else
-    sappend(tmpbuf, sizeof(tmpbuf), "%08x ", uc->uc_mcontext.gregs[i]);
-#endif
+    sappend(tmpbuf, sizeof(tmpbuf), "%016" PRIx64, uc->uc_mcontext.gregs[i]);
   }
 #endif
   tvhlog_spawn(LOG_ALERT, "CRASH", "%s", tmpbuf);
@@ -258,6 +254,7 @@ trap_init(const char *ver)
 	free(m);
       }
     }
+    close(fd);
   }
   
   snprintf(line1, sizeof(line1),

@@ -219,7 +219,7 @@ static void _epggrab_load ( void )
   }
  
   /* Load module config (channels) */
-#if ENABLE_LINUXDVB
+#if 0 //ENABLE_MPEGTS
   eit_load();
   opentv_load();
 #endif
@@ -378,35 +378,29 @@ void epggrab_init ( void )
   epggrab_channel_reicon     = 0;
   epggrab_epgdb_periodicsave = 0;
 
-  /* Lists */
-#if ENABLE_LINUXDVB
-  extern TAILQ_HEAD(, epggrab_ota_mux) ota_mux_all;
-  TAILQ_INIT(&ota_mux_all);
-#endif
-
   pthread_mutex_init(&epggrab_mutex, NULL);
   pthread_cond_init(&epggrab_cond, NULL);
-  
+
   /* Initialise modules */
-#if ENABLE_LINUXDVB
+#if ENABLE_MPEGTS
   eit_init();
   opentv_init();
 #endif
   pyepg_init();
   xmltv_init();
 
+  /* Initialise the OTA subsystem */
+  epggrab_ota_init();
+  
   /* Load config */
   _epggrab_load();
-#if ENABLE_LINUXDVB
-  epggrab_ota_load();
-#endif
 
   /* Start internal grab thread */
   pthread_t      tid;
   pthread_attr_t tattr;
   pthread_attr_init(&tattr);
   pthread_attr_setdetachstate(&tattr, PTHREAD_CREATE_DETACHED);
-  pthread_create(&tid, &tattr, _epggrab_internal_thread, NULL);
+  tvhthread_create(&tid, &tattr, _epggrab_internal_thread, NULL, 1);
   pthread_attr_destroy(&tattr);
 }
 

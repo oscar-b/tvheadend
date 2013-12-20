@@ -23,13 +23,15 @@ tvheadend.status_subs = function() {
 		}, {
 			name : 'errors'
 		}, {
-			name : 'bw'
+			name : 'in'
+		}, {
+			name : 'out'
 		}, {
 			name : 'start',
 			type : 'date',
 			dateFormat : 'U' /* unix time */
 		} ],
-		url : 'subscriptions',
+		url : 'api/status/subscriptions',
 		autoLoad : true,
 		id : 'id'
 	});
@@ -51,7 +53,8 @@ tvheadend.status_subs = function() {
 			r.data.service  = m.service;
 			r.data.state    = m.state;
 			r.data.errors   = m.errors;
-			r.data.bw       = m.bw
+			r.data.in       = m.in;
+			r.data.out      = m.out;
 
 			tvheadend.subsStore.afterEdit(r);
 			tvheadend.subsStore.fireEvent('updated', tvheadend.subsStore, r,
@@ -111,9 +114,15 @@ tvheadend.status_subs = function() {
 		dataIndex : 'errors'
 	}, {
 		width : 50,
-		id : 'bw',
-		header : "Bandwidth (kb/s)",
-		dataIndex : 'bw',
+		id : 'in',
+		header : "Input (kb/s)",
+		dataIndex : 'in',
+		renderer: renderBw
+	}, {
+		width : 50,
+		id : 'out',
+		header : "Output (kb/s)",
+		dataIndex : 'out',
 		renderer: renderBw
 	} ]);
 
@@ -122,7 +131,7 @@ tvheadend.status_subs = function() {
 		loadMask : true,
 		stripeRows : true,
 		disableSelection : true,
-		title : 'Active subscriptions',
+		title : 'Subscriptions',
 		iconCls : 'eye',
 		store : tvheadend.subsStore,
 		cm : subsCm,
@@ -136,9 +145,61 @@ tvheadend.status_subs = function() {
 
 
 /**
- *
+ * Streams
  */
-tvheadend.status_adapters = function() {
+tvheadend.status_streams = function() {
+
+	var stream_store = new Ext.data.JsonStore({
+		root : 'entries',
+		totalProperty : 'totalCount',
+		fields : [ {
+			name : 'uuid'
+		}, {
+			name : 'input'
+		}, {
+			name : 'username'
+		}, {
+			name : 'stream'
+		}, {
+			name : 'subs'
+		}, {
+			name : 'weight'
+		}, {
+			name : 'signal'
+		}, {
+			name : 'ber'
+		}, {
+			name : 'unc'
+		}, {
+			name : 'snr'
+		}, {
+			name : 'bps'
+		},
+		],
+		url : 'api/status/inputs',
+		autoLoad : true,
+		id : 'uuid'
+	});
+
+  tvheadend.comet.on('input_status', function(m){
+    if (m.reload != null) stream_store.reload();
+    if (m.update != null) {
+      var r = stream_store.getById(m.uuid);
+      if (r) {
+        r.data.subs    = m.subs;
+        r.data.weight  = m.weight;
+        r.data.signal  = m.signal;
+        r.data.ber     = m.ber;
+        r.data.unc     = m.unc;
+        r.data.snr     = m.snr;
+        r.data.bps     = m.bps;
+			  stream_store.afterEdit(r);
+			  stream_store.fireEvent('updated', stream_store, r, Ext.data.Record.COMMIT);
+      } else {
+        stream_store.reload();
+      } 
+    }
+  });
 
 	var signal = new Ext.ux.grid.ProgressColumn({
 		header : "Signal Strength",
@@ -149,25 +210,29 @@ tvheadend.status_adapters = function() {
 	});
 
 	function renderBw(value) {
-		return parseInt(value / 125);
+		return parseInt(value / 1024);
 	}
 
 	var cm = new Ext.grid.ColumnModel([{
-		width : 50,
-		header : "Name",
-		dataIndex : 'name'
-        },{
-		width : 50,
-		header : "Hardware device",
-		dataIndex : 'path'
+		width : 100,
+		header : "Input",
+		dataIndex : 'input'
         },{
 		width : 100,
-		header : "Currently tuned to",
-		dataIndex : 'currentMux'
+		header : "Stream",
+		dataIndex : 'stream'
+        },{
+		width : 50,
+		header : "Subs #",
+		dataIndex : 'subs'
+        },{
+		width : 50,
+		header : "Weight",
+		dataIndex : 'weight'
         },{
 		width : 100,
 		header : "Bandwidth (kb/s)",
-		dataIndex : 'bw',
+		dataIndex : 'bps',
 		renderer: renderBw
         },{
 		width : 50,
@@ -176,7 +241,7 @@ tvheadend.status_adapters = function() {
         },{
 		width : 50,
 		header : "Uncorrected bit error rate",
-		dataIndex : 'uncavg'
+		dataIndex : 'unc'
         },{
 		width : 50,
 		header : "SNR",
@@ -195,9 +260,9 @@ tvheadend.status_adapters = function() {
 		loadMask : true,
 		stripeRows : true,
 		disableSelection : true,
-		title : 'Adapters',
+		title : 'Stream',
 		iconCls : 'hardware',
-		store : tvheadend.tvAdapterStore,
+		store : stream_store,
 		cm : cm,
                 flex: 1,
 		viewConfig : {
@@ -207,16 +272,94 @@ tvheadend.status_adapters = function() {
         return panel;
 }
 
-tvheadend.status = function() {
+/**
+ *
+ */
+tvheadend.status_conns = function() {
 
-        var panel = new Ext.Panel({
-                border: false,
-		layout : 'vbox',
-		title : 'Status',
+	var store = new Ext.data.JsonStore({
+		root : 'entries',
+		totalProperty : 'totalCount',
+		fields : [ {
+      name : 'id'
+    }, {
+			name : 'type'
+		}, {
+			name : 'peer'
+		}, {
+			name : 'user'
+		}, {
+			name : 'started',
+			type : 'date',
+			dateFormat : 'U' /* unix time */
+		} ],
+		url : 'api/status/connections',
+		autoLoad : true,
+		id : 'id'
+	});
+
+	tvheadend.comet.on('connections', function(m) {
+		if (m.reload != null) store.reload();
+	});
+
+	function renderDate(value) {
+		var dt = new Date(value);
+		return dt.format('Y-m-d H:i:s');
+	}
+
+	var cm = new Ext.grid.ColumnModel([{
+		width : 50,
+		id : 'type',
+		header : "Type",
+		dataIndex : 'type'
+	}, {
+		width : 50,
+		id : 'peer',
+		header : "IP Address",
+		dataIndex : 'peer'
+	}, {
+		width : 50,
+		id : 'user',
+		header : "Username",
+		dataIndex : 'user'
+	}, {
+		width : 50,
+		id : 'started',
+		header : "Started",
+		dataIndex : 'started',
+		renderer : renderDate
+	} ]);
+
+	var panel = new Ext.grid.GridPanel({
+    border: false,
+		loadMask : true,
+		stripeRows : true,
+		disableSelection : true,
+		title : 'Connections',
 		iconCls : 'eye',
-		items : [ new tvheadend.status_subs, new tvheadend.status_adapters ]
-        });
+		store : store,
+		cm : cm,
+    flex: 1,
+		viewConfig : {
+			forceFit : true
+		}
+	});
+  return panel;
+}
 
+tvheadend.status = function() {
+  var panel = new Ext.TabPanel({
+		title : 'Status',
+    autoScroll : true,
+    activeTab : 0,
+		iconCls : 'eye',
+		items : [
+      new tvheadend.status_streams,
+      new tvheadend.status_subs,
+      new tvheadend.status_conns,
+      new tvheadend.service_mapper_status
+    ]
+  });
 	return panel;
 }
 
