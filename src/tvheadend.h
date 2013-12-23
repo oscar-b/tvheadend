@@ -389,6 +389,20 @@ typedef enum
   SIGNAL_NONE
 } signal_state_t;
 
+static struct strtab signal_statetab[] = {
+  { "GOOD",       SIGNAL_GOOD    },
+  { "BAD",        SIGNAL_BAD     },
+  { "FAINT",      SIGNAL_BAD     },
+  { "NONE",       SIGNAL_BAD     },
+};
+
+static inline const char * signal2str ( signal_state_t st )
+{
+  const char *r = val2str(st, signal_statetab);
+  if (!r) r = "UNKNOWN";
+  return r;
+}
+
 /**
  * Streaming messages are sent from the pad to its receivers
  */
@@ -588,6 +602,13 @@ int makedirs ( const char *path, int mode );
 int rmtree ( const char *path );
 
 char *regexp_escape ( const char *str );
+
+/* glibc wrapper */
+#if !__GLIBC_PREREQ(2,8)
+void
+qsort_r(void *base, size_t nmemb, size_t size,
+       int (*cmp)(const void *, const void *, void *), void *aux);
+#endif
 
 /* printing */
 # if __WORDSIZE == 64

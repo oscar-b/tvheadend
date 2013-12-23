@@ -294,6 +294,7 @@ linuxdvb_frontend_stop_mux
 
   /* Not locked */
   lfe->lfe_locked = 0;
+  lfe->lfe_status = 0;
 
   /* Ensure it won't happen immediately */
   gtimer_arm(&lfe->lfe_monitor_timer, linuxdvb_frontend_monitor, lfe, 2);
@@ -404,41 +405,18 @@ linuxdvb_frontend_default_tables
 {
   mpegts_mux_t *mm = (mpegts_mux_t*)lm;
 
-  /* Common */
-  mpegts_table_add(mm, DVB_PAT_BASE, DVB_PAT_MASK, dvb_pat_callback,
-                   NULL, "pat", MT_QUICKREQ | MT_CRC | MT_RECORD,
-                   DVB_PAT_PID);
-#if 0
-  mpegts_table_add(mm, DVB_CAT_BASE, DVB_CAT_MASK, dvb_cat_callback,
-                   NULL, "cat", MT_CRC, DVB_CAT_PID);
-#endif
+  psi_tables_default(mm);
 
   /* ATSC */
   if (lfe->lfe_info.type == FE_ATSC) {
-    int tableid;
     if (lm->lm_tuning.dmc_fe_params.u.vsb.modulation == VSB_8)
-      tableid = DVB_VCT_T_BASE;
+      psi_tables_atsc_t(mm);
     else
-      tableid = DVB_VCT_C_BASE;
-    mpegts_table_add(mm, tableid, DVB_VCT_MASK, atsc_vct_callback,
-                     NULL, "vct", MT_QUICKREQ | MT_CRC | MT_RECORD,
-                     DVB_VCT_PID);
+      psi_tables_atsc_c(mm);
 
   /* DVB */
   } else {
-    mpegts_table_add(mm, DVB_CAT_BASE, DVB_CAT_MASK, dvb_cat_callback,
-                     NULL, "cat", MT_QUICKREQ | MT_CRC, DVB_CAT_PID);
-    mpegts_table_add(mm, DVB_NIT_BASE, DVB_NIT_MASK, dvb_nit_callback,
-                     NULL, "nit", MT_QUICKREQ | MT_CRC, DVB_NIT_PID);
-    mpegts_table_add(mm, DVB_SDT_BASE, DVB_SDT_MASK, dvb_sdt_callback,
-                     NULL, "sdt", MT_QUICKREQ | MT_CRC | MT_RECORD,
-                     DVB_SDT_PID);
-    mpegts_table_add(mm, DVB_BAT_BASE, DVB_BAT_MASK, dvb_bat_callback,
-                     NULL, "bat", MT_CRC, DVB_BAT_PID);
-#if 0
-    mpegts_table_add(mm, DVB_TOT_BASE, DVB_TOT_MASK, dvb_tot_callback,
-                     NULL, "tot", MT_CRC, DVB_TOT_PID);
-#endif
+    psi_tables_dvb(mm);
   }
 }
 
@@ -497,7 +475,19 @@ linuxdvb_frontend_monitor ( void *aux )
     status = SIGNAL_NONE;
 
   /* Set default period */
-  tvhtrace("linuxdvb", "%s - status %d", buf, status);
+  if (fe_status != lfe->lfe_status) {
+    tvhdebug("linuxdvb", "%s - status %7s (%s%s%s%s%s%s)", buf,
+             signal2str(status),
+             (fe_status & FE_HAS_SIGNAL) ?  "SIGNAL"  : "",
+             (fe_status & FE_HAS_CARRIER) ? " | CARRIER" : "",
+             (fe_status & FE_HAS_VITERBI) ? " | VITERBI" : "",
+             (fe_status & FE_HAS_SYNC) ?    " | SYNC"    : "",
+             (fe_status & FE_HAS_LOCK) ?    " | SIGNAL"  : "",
+             (fe_status & FE_TIMEDOUT) ?    "TIMEOUT" : "");
+  } else {
+    tvhtrace("linuxdvb", "%s - status %d (%04X)", buf, status, fe_status);
+  }
+  lfe->lfe_status = fe_status;
 
   /* Get current mux */
   mm = mmi->mmi_mux;
@@ -741,6 +731,8 @@ linuxdvb_frontend_tune0
       return SM_CODE_TUNING_FAILED;
     }
   }
+  lfe->lfe_locked = 0;
+  lfe->lfe_status = 0;
 
   /* S2 tuning */
 #if DVB_API_VERSION >= 5

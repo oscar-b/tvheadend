@@ -200,7 +200,7 @@ gtimercmp(gtimer_t *a, gtimer_t *b)
     return -1;
   if(a->gti_expire.tv_nsec > b->gti_expire.tv_nsec)
     return 1;
- return -1;
+ return 0;
 }
 
 /**
@@ -220,6 +220,8 @@ gtimer_arm_abs2
   gti->gti_expire   = *when;
 
   LIST_INSERT_SORTED(&gtimers, gti, gti_link, gtimercmp);
+
+  //tvhdebug("gtimer", "%p @ %ld.%09ld", gti, when->tv_sec, when->tv_nsec);
 
   if (LIST_FIRST(&gtimers) == gti)
     pthread_cond_signal(&gtimer_cond); // force timer re-check
@@ -269,6 +271,7 @@ void
 gtimer_disarm(gtimer_t *gti)
 {
   if(gti->gti_callback) {
+    //tvhdebug("gtimer", "%p disarm", gti);
     LIST_REMOVE(gti, gti_link);
     gti->gti_callback = NULL;
   }
@@ -361,7 +364,15 @@ mainloop(void)
     // TODO: there is a risk that if timers re-insert themselves to
     //       the top of the list with a 0 offset we could loop indefinitely
     
+#if 0
+    tvhdebug("gtimer", "now %ld.%09ld", ts.tv_sec, ts.tv_nsec);
+    LIST_FOREACH(gti, &gtimers, gti_link)
+      tvhdebug("gtimer", "  gti %p expire %ld.%08ld",
+               gti, gti->gti_expire.tv_sec, gti->gti_expire.tv_nsec);
+#endif
+
     while((gti = LIST_FIRST(&gtimers)) != NULL) {
+      
       if ((gti->gti_expire.tv_sec > ts.tv_sec) ||
           ((gti->gti_expire.tv_sec == ts.tv_sec) &&
            (gti->gti_expire.tv_nsec > ts.tv_nsec))) {
@@ -370,6 +381,7 @@ mainloop(void)
       }
 
       cb = gti->gti_callback;
+      //tvhdebug("gtimer", "%p callback", gti);
 
       LIST_REMOVE(gti, gti_link);
       gti->gti_callback = NULL;
@@ -384,6 +396,7 @@ mainloop(void)
     }
 
     /* Wait */
+    //tvhdebug("gtimer", "wait till %ld.%09ld", ts.tv_sec, ts.tv_nsec);
     pthread_cond_timedwait(&gtimer_cond, &global_lock, &ts);
     pthread_mutex_unlock(&global_lock);
   }
@@ -424,8 +437,7 @@ main(int argc, char **argv)
               opt_fileline     = 0,
               opt_threadid     = 0,
               opt_ipv6         = 0,
-              opt_tsfile_tuner = 0,
-              opt_tsfile_atsc  = 0;
+              opt_tsfile_tuner = 0;
   const char *opt_config       = NULL,
              *opt_user         = NULL,
              *opt_group        = NULL,
@@ -493,7 +505,6 @@ main(int argc, char **argv)
     { 0, NULL, "TODO: testing", OPT_BOOL, NULL },
     { 0, "tsfile_tuners", "Number of tsfile tuners", OPT_INT, &opt_tsfile_tuner },
     { 0, "tsfile", "tsfile input (mux file)", OPT_STR_LIST, &opt_tsfile },
-    { 0, "tsfile_atsc", "tsfile input is ATSC", OPT_INT, &opt_tsfile_atsc }
 
   };
 
@@ -716,7 +727,7 @@ main(int argc, char **argv)
   if(opt_tsfile.num) {
     tsfile_init(opt_tsfile_tuner ?: opt_tsfile.num);
     for (i = 0; i < opt_tsfile.num; i++)
-      tsfile_add_file(opt_tsfile.str[i], opt_tsfile_atsc);
+      tsfile_add_file(opt_tsfile.str[i]);
   }
 #endif
 #if ENABLE_IPTV
