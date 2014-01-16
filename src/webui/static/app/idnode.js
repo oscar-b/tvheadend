@@ -994,6 +994,13 @@ tvheadend.idnode_tree = function (conf)
     }
   });
 
+  if (conf.comet) {
+    tvheadend.comet.on(conf.comet, function(o) {
+      if (o.reload)
+        tree.getRootNode().reload();
+    });
+  }
+
   // TODO: top-level reload
   tvheadend.comet.on('idnodeUpdated', function(o) {
     var n = tree.getNodeById(o.uuid);

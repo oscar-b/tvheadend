@@ -250,7 +250,7 @@ tvheadend.epg = function() {
 		setMetaAttr(meta, record);
 
 		var dt = new Date(value);
-		return dt.format('l H:i');
+		return dt.format('D, M d, H:i');
 	}
 
 	function renderDuration(value, meta, record, rowIndex, colIndex, store) {
@@ -451,6 +451,8 @@ tvheadend.epg = function() {
 	});
 
 	var panel = new Ext.ux.grid.livegrid.GridPanel({
+		stateful: true,
+		stateId : 'epggrid',
 		enableDragDrop : false,
 		cm : epgCm,
 		plugins : [ actions ],

@@ -29,7 +29,7 @@ PROG    := $(BUILDDIR)/tvheadend
 
 CFLAGS  += -Wall -Werror -Wwrite-strings -Wno-deprecated-declarations
 CFLAGS  += -Wmissing-prototypes -fms-extensions
-CFLAGS  += -g -funsigned-char -O2 
+CFLAGS  += -g -funsigned-char -O2
 CFLAGS  += -D_FILE_OFFSET_BITS=64
 CFLAGS  += -I${BUILDDIR} -I${ROOTDIR}/src -I${ROOTDIR}
 LDFLAGS += -lrt -ldl -lpthread -lm
@@ -112,6 +112,7 @@ SRCS =  src/version.c \
 	src/service_mapper.c \
 	src/input.c \
 	src/http/http_client.c \
+	src/fsmonitor.c \
 
 SRCS += \
 	src/api.c \
@@ -185,7 +186,6 @@ SRCS-$(CONFIG_MPEGTS) += \
 # DVB
 SRCS-${CONFIG_LINUXDVB} += \
         src/input/mpegts/linuxdvb/linuxdvb.c \
-        src/input/mpegts/linuxdvb/linuxdvb_device.c \
         src/input/mpegts/linuxdvb/linuxdvb_adapter.c \
         src/input/mpegts/linuxdvb/linuxdvb_frontend.c \
         src/input/mpegts/linuxdvb/linuxdvb_network.c \
@@ -195,6 +195,7 @@ SRCS-${CONFIG_LINUXDVB} += \
         src/input/mpegts/linuxdvb/linuxdvb_lnb.c \
         src/input/mpegts/linuxdvb/linuxdvb_switch.c \
         src/input/mpegts/linuxdvb/linuxdvb_rotor.c \
+        src/input/mpegts/linuxdvb/linuxdvb_en50494.c \
         src/input/mpegts/linuxdvb/scanfile.c \
 
 # IPTV

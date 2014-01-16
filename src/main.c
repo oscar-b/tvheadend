@@ -29,7 +29,6 @@
 #include <limits.h>
 #include <time.h>
 #include <locale.h>
-#include <sys/prctl.h>
 
 #include <pwd.h>
 #include <grp.h>
@@ -59,9 +58,14 @@
 #include "idnode.h"
 #include "imagecache.h"
 #include "timeshift.h"
+#include "fsmonitor.h"
 #if ENABLE_LIBAV
 #include "libav.h"
 #include "plumbing/transcoding.h"
+#endif
+
+#ifdef PLATFORM_LINUX
+#include <sys/prctl.h>
 #endif
 
 /* Command line option struct */
@@ -420,6 +424,13 @@ main(int argc, char **argv)
   const char *log_debug = NULL, *log_trace = NULL;
   char buf[512];
 
+  /* Setup global mutexes */
+  pthread_mutex_init(&ffmpeg_lock, NULL);
+  pthread_mutex_init(&fork_lock, NULL);
+  pthread_mutex_init(&global_lock, NULL);
+  pthread_mutex_init(&atomic_lock, NULL);
+  pthread_cond_init(&gtimer_cond, NULL);
+
   /* Defaults */
   tvheadend_webui_port      = 9981;
   tvheadend_webroot         = NULL;
@@ -681,9 +692,13 @@ main(int argc, char **argv)
 
     /* Make dumpable */
     if (opt_dump) {
+#ifdef PLATFORM_LINUX
       if (chdir("/tmp"))
         tvhwarn("START", "failed to change cwd to /tmp");
       prctl(PR_SET_DUMPABLE, 1);
+#else
+      tvhwarn("START", "Coredumps not implemented on your platform");
+#endif
     }
 
     umask(0);
@@ -702,14 +717,8 @@ main(int argc, char **argv)
   idnode_init();
   hts_settings_init(opt_config);
 
-  /* Setup global mutexes */
-  pthread_mutex_init(&ffmpeg_lock, NULL);
-  pthread_mutex_init(&fork_lock, NULL);
-  pthread_mutex_init(&global_lock, NULL);
-  pthread_mutex_init(&atomic_lock, NULL);
+  /* Initialise clock */
   pthread_mutex_lock(&global_lock);
-  pthread_cond_init(&gtimer_cond, NULL);
-
   time(&dispatch_clock);
 
   /* Signal handling */
@@ -722,6 +731,8 @@ main(int argc, char **argv)
    */
   
   api_init();
+
+  fsmonitor_init();
 
 #if ENABLE_LIBAV
   libav_init();

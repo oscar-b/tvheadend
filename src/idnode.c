@@ -230,6 +230,12 @@ idnode_uuid_as_str(const idnode_t *in)
   p = (p + 1) % 16;
   return idnode_uuid_as_str0(in, b);
 }
+const char *
+idnode_uuid_as_str1 ( const uint8_t *bin, size_t len, char *b )
+{
+  bin2hex(b, UUID_STR_LEN, bin, len);
+  return b;
+}
 
 /**
  *
@@ -488,7 +494,7 @@ idnode_cmp_sort
     case PT_STR:
       {
         int r;
-        const char *stra = strdupa(idnode_get_str(ina, sort->key) ?: "");
+        const char *stra = tvh_strdupa(idnode_get_str(ina, sort->key) ?: "");
         const char *strb = idnode_get_str(inb, sort->key);
         if (sort->dir == IS_ASC)
           r = strcmp(stra ?: "", strb ?: "");
@@ -660,7 +666,7 @@ void
 idnode_set_sort
   ( idnode_set_t *is, idnode_sort_t *sort )
 {
-  qsort_r(is->is_array, is->is_count, sizeof(idnode_t*), idnode_cmp_sort, sort);
+  qsort_r(is->is_array, is->is_count, sizeof(idnode_t*), idnode_cmp_sort, (void*)sort);
 }
 
 void
